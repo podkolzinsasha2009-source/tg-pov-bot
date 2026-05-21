@@ -163,6 +163,43 @@ async def handle_voice(message: Message) -> None:
             await message.answer(f"❌ Ошибка: {e}")
 
 
+@dp.message(F.text, F.forward_from_chat)
+async def handle_forwarded_emoji(message: Message) -> None:
+    """Извлекает custom_emoji_id из пересланных постов канала @perviy_stomatolog."""
+    if message.from_user.id != ALLOWED_USER_ID:
+        return
+
+    fwd_chat = message.forward_from_chat
+    if not fwd_chat or fwd_chat.username != "perviy_stomatolog":
+        return
+
+    if not message.entities:
+        await message.answer("ℹ️ В пересланном посте нет entities с эмодзи.")
+        return
+
+    # Telegram использует UTF-16 offset/length — конвертируем корректно
+    text_utf16 = message.text.encode("utf-16-le")
+    saved: list[tuple[str, str]] = []
+
+    for entity in message.entities:
+        if entity.type != "custom_emoji" or not entity.custom_emoji_id:
+            continue
+        start = entity.offset * 2
+        end   = (entity.offset + entity.length) * 2
+        emoji_char = text_utf16[start:end].decode("utf-16-le")
+
+        db.save_emoji(emoji_char, entity.custom_emoji_id)
+        saved.append((emoji_char, entity.custom_emoji_id))
+        print(f"[emoji] сохранён {emoji_char!r} → {entity.custom_emoji_id}")
+
+    if not saved:
+        await message.answer("ℹ️ Анимированных эмодзи в пересланном посте не найдено.")
+        return
+
+    lines = [f"✅ Эмодзи {char} сохранён с ID {eid}!" for char, eid in saved]
+    await message.answer("\n".join(lines))
+
+
 @dp.message(Command("publish"))
 async def handle_publish(message: Message) -> None:
     if message.from_user.id != ALLOWED_USER_ID:

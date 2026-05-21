@@ -14,6 +14,12 @@ def init_db() -> None:
                 timestamp TEXT    NOT NULL
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS emojis (
+                emoji_char      TEXT PRIMARY KEY,
+                custom_emoji_id TEXT NOT NULL
+            )
+        """)
 
 
 def add_thought(user_id: int, text: str) -> None:
@@ -22,6 +28,22 @@ def add_thought(user_id: int, text: str) -> None:
             "INSERT INTO thoughts (user_id, text, timestamp) VALUES (?, ?, ?)",
             (user_id, text, datetime.utcnow().isoformat()),
         )
+
+
+def save_emoji(emoji_char: str, custom_emoji_id: str) -> None:
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO emojis (emoji_char, custom_emoji_id) VALUES (?, ?)",
+            (emoji_char, custom_emoji_id),
+        )
+
+
+def get_all_emojis() -> list[tuple[str, str]]:
+    """Возвращает список (emoji_char, custom_emoji_id) из таблицы emojis."""
+    with sqlite3.connect(DB_PATH) as conn:
+        return conn.execute(
+            "SELECT emoji_char, custom_emoji_id FROM emojis ORDER BY emoji_char"
+        ).fetchall()
 
 
 def get_and_clear_thoughts(user_id: int) -> str:
