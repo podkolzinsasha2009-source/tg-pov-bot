@@ -1,5 +1,6 @@
 import asyncio
 import io
+import traceback
 
 from aiohttp import web
 from aiogram import Bot, Dispatcher, F
@@ -66,33 +67,55 @@ async def prepare_publication(user_id: int) -> None:
 # Handlers
 # ---------------------------------------------------------------------------
 
+@dp.message(Command("start"))
+async def handle_start(message: Message) -> None:
+    await message.answer(
+        "Бот работает ✅\n\n"
+        "Отправь голосовое — Gemini транскрибирует и сохранит мысль.\n"
+        "Скажи «опубликовать пост» — соберёт всё в готовый пост.\n"
+        "/publish — то же самое командой."
+    )
+
+
 @dp.message(F.voice)
 async def handle_voice(message: Message) -> None:
     if message.from_user.id != ALLOWED_USER_ID:
+        print(f"[voice] отклонён user_id={message.from_user.id}")
         return
 
     status_msg = await message.answer("🎙 Скачиваю аудио...")
 
-    file_info = await bot.get_file(message.voice.file_id)
-    buf = io.BytesIO()
-    await bot.download_file(file_info.file_path, destination=buf)
-    audio_bytes = buf.getvalue()
+    try:
+        file_info = await bot.get_file(message.voice.file_id)
+        buf = io.BytesIO()
+        await bot.download_file(file_info.file_path, destination=buf)
+        audio_bytes = buf.getvalue()
+        print(f"[voice] скачано {len(audio_bytes)} байт")
 
-    await status_msg.edit_text("✍️ Транскрибирую...")
+        await status_msg.edit_text("✍️ Транскрибирую...")
 
-    loop = asyncio.get_running_loop()
-    text_output = await loop.run_in_executor(
-        None, transcribe_audio, audio_bytes, OPENROUTER_API_KEY
-    )
-    await status_msg.delete()
+        loop = asyncio.get_running_loop()
+        text_output = await loop.run_in_executor(
+            None, transcribe_audio, audio_bytes, OPENROUTER_API_KEY
+        )
+        print(f"[voice] транскрипция: {text_output[:80]!r}")
+        await status_msg.delete()
 
-    if "опубликовать пост" in text_output.lower():
-        notify = await message.answer("🔄 Собираю архив и готовлю публикацию...")
-        await prepare_publication(message.from_user.id)
-        await notify.delete()
-    else:
-        db.add_thought(message.from_user.id, text_output)
-        await message.answer(f"💾 Мысль сохранена:\n\n{text_output}")
+        if "опубликовать пост" in text_output.lower():
+            notify = await message.answer("🔄 Собираю архив и готовлю публикацию...")
+            await prepare_publication(message.from_user.id)
+            await notify.delete()
+        else:
+            db.add_thought(message.from_user.id, text_output)
+            await message.answer(f"💾 Мысль сохранена:\n\n{text_output}")
+
+    except Exception as e:
+        print(f"[voice] ОШИБКА: {e}")
+        traceback.print_exc()
+        try:
+            await status_msg.edit_text(f"❌ Ошибка: {e}")
+        except Exception:
+            await message.answer(f"❌ Ошибка: {e}")
 
 
 @dp.message(Command("publish"))
@@ -134,10 +157,12 @@ async def handle_reject(callback: CallbackQuery) -> None:
 async def on_startup(bot: Bot) -> None:
     db.init_db()
     await bot.set_webhook(WEBHOOK_URL)
+    print(f"[startup] webhook установлен: {WEBHOOK_URL}")
 
 
 async def on_shutdown(bot: Bot) -> None:
     await bot.delete_webhook()
+    print("[shutdown] webhook удалён")
 
 
 async def health_check(request: web.Request) -> web.Response:
@@ -154,6 +179,7 @@ def main() -> None:
     SimpleRequestHandler(dispatcher=dp, bot=bot).register(app, path=WEBHOOK_PATH)
     setup_application(app, dp, bot=bot)
 
+    print(f"[main] запуск на порту {PORT}")
     web.run_app(app, host="0.0.0.0", port=PORT)
 
 
