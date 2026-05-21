@@ -15,7 +15,7 @@ from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_applicati
 
 import db
 from config import ALLOWED_USER_ID, BASE_WEBHOOK_URL, BOT_TOKEN, CHANNEL_ID, OPENROUTER_API_KEY, PORT
-from openrouter_cl import get_structured_post, transcribe_audio
+from openrouter_cl import edit_current_post, get_structured_post, transcribe_audio
 
 WEBHOOK_PATH = "/webhook"
 WEBHOOK_URL = f"{BASE_WEBHOOK_URL}{WEBHOOK_PATH}"
@@ -83,6 +83,7 @@ async def handle_voice(message: Message) -> None:
         print(f"[voice] отклонён user_id={message.from_user.id}")
         return
 
+    user_id = message.from_user.id
     status_msg = await message.answer("🎙 Скачиваю аудио...")
 
     try:
@@ -101,12 +102,43 @@ async def handle_voice(message: Message) -> None:
         print(f"[voice] транскрипция: {text_output[:80]!r}")
         await status_msg.delete()
 
-        if "опубликовать пост" in text_output.lower():
-            notify = await message.answer("🔄 Собираю архив и готовлю публикацию...")
-            await prepare_publication(message.from_user.id)
+        cmd = text_output.lower()
+
+        if "опубликовать пост" in cmd:
+            post_text = pending_posts.pop(user_id, None)
+            if not post_text:
+                await message.answer("⚠️ Нет готового черновика. Сначала сгенерируй пост командой /publish.")
+                return
+            await bot.send_message(CHANNEL_ID, post_text)
+            await message.answer("✅ Пост опубликован в канале!")
+
+        elif "измени пост" in cmd:
+            old_post = pending_posts.get(user_id)
+            if not old_post:
+                await message.answer("⚠️ Нет черновика для редактирования. Сначала сгенерируй пост командой /publish.")
+                return
+            notify = await message.answer("✏️ Вношу правки в черновик...")
+            result = await loop.run_in_executor(
+                None, edit_current_post, old_post, text_output, OPENROUTER_API_KEY
+            )
             await notify.delete()
+
+            post_text = result.get("post_text", "").strip()
+            audit     = result.get("audit", "Аудит недоступен.").strip()
+
+            if not post_text:
+                await message.answer(f"⚠️ Не удалось отредактировать пост.\n\n{audit}")
+                return
+
+            pending_posts[user_id] = post_text
+            preview = (
+                f"📋 АУДИТ ПРАВОК ОТ GEMINI:\n{audit}\n\n"
+                f"--- 📝 ОБНОВЛЁННЫЙ ЧЕРНОВИК ---\n\n{post_text}"
+            )
+            await message.answer(preview, reply_markup=approval_keyboard())
+
         else:
-            db.add_thought(message.from_user.id, text_output)
+            db.add_thought(user_id, text_output)
             await message.answer(f"💾 Мысль сохранена:\n\n{text_output}")
 
     except Exception as e:

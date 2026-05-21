@@ -91,6 +91,69 @@ def transcribe_audio(audio_bytes: bytes, api_key: str) -> str:
         return f"Неожиданный ответ API: {data}"
 
 
+EDIT_SYSTEM_PROMPT = """Ты — опытный PR-менеджер Telegram-канала "Dental Авангард I".
+Тебе дан готовый черновик поста и голосовая команда-правка от Александра.
+Примень правку точно, сохрани фирменный стиль канала и верни СТРОГО JSON без markdown-обёртки:
+{
+  "post_text": "Обновлённый текст поста",
+  "audit": "Что именно изменено и почему"
+}
+
+Фирменный стиль:
+- Начинается со "Денталы, всем привет." или "Денталы, на связи."
+- Уверенный, прагматичный тон; списки (•); жирный для ключевых мыслей.
+- В конце ОБЯЗАТЕЛЬНО: ⚡️ WAY TO DENTAL-100 | #философияАвангарда 🧠"""
+
+
+def edit_current_post(old_post: str, edit_instruction: str, api_key: str) -> dict:
+    payload = {
+        "model": MODEL,
+        "messages": [
+            {"role": "system", "content": EDIT_SYSTEM_PROMPT},
+            {
+                "role": "user",
+                "content": (
+                    f"ТЕКУЩИЙ ЧЕРНОВИК:\n{old_post}\n\n"
+                    f"КОМАНДА-ПРАВКА ОТ АЛЕКСАНДРА:\n{edit_instruction}"
+                ),
+            },
+        ],
+    }
+
+    try:
+        response = requests.post(
+            API_URL,
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json=payload,
+            timeout=120,
+        )
+        print(f"[edit_post] HTTP {response.status_code}")
+        data = response.json()
+    except Exception as e:
+        print(f"[edit_post] ошибка запроса: {e}")
+        traceback.print_exc()
+        return {"post_text": old_post, "audit": f"Ошибка запроса: {e}"}
+
+    if "error" in data:
+        msg = _api_error_message(data)
+        print(f"[edit_post] ошибка API: {msg}")
+        return {"post_text": old_post, "audit": f"Ошибка OpenRouter: {msg}"}
+
+    try:
+        raw = data["choices"][0]["message"]["content"].strip()
+    except (KeyError, IndexError):
+        print(f"[edit_post] неожиданный ответ: {data}")
+        return {"post_text": old_post, "audit": f"Неожиданный ответ API: {data}"}
+
+    if raw.startswith("```"):
+        raw = raw.strip("`").lstrip("json").strip()
+
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return {"post_text": raw, "audit": "Не удалось распарсить JSON-ответ от модели."}
+
+
 def get_structured_post(text: str, api_key: str) -> dict:
     payload = {
         "model": MODEL,
