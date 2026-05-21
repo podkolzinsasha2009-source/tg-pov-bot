@@ -112,7 +112,7 @@ async def handle_voice(message: Message) -> None:
             if not post_text:
                 await message.answer("⚠️ Нет готового черновика. Сначала сгенерируй пост командой /publish.")
                 return
-            await bot.send_message(CHANNEL_ID, post_text)
+            await bot.send_message(CHANNEL_ID, post_text, parse_mode="HTML")
             await message.answer("✅ Пост опубликован в канале!")
 
         elif intent == "EDIT_POST":
@@ -218,7 +218,7 @@ async def handle_approve(callback: CallbackQuery) -> None:
         await callback.answer("⚠️ Пост не найден в кэше.", show_alert=True)
         return
 
-    await bot.send_message(CHANNEL_ID, post_text)
+    await bot.send_message(CHANNEL_ID, post_text, parse_mode="HTML")
     await callback.message.edit_reply_markup(reply_markup=None)
     await callback.message.answer("✅ Пост опубликован в канале!")
     await callback.answer()
