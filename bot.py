@@ -47,25 +47,17 @@ async def prepare_publication(user_id: int) -> None:
         return
 
     loop = asyncio.get_running_loop()
-    result = await loop.run_in_executor(None, get_structured_post, archive, OPENROUTER_API_KEY)
-
-    post_text = result.get("post_text", "").strip()
-    audit     = result.get("audit", "Аудит недоступен.").strip()
+    post_text = await loop.run_in_executor(None, get_structured_post, archive, OPENROUTER_API_KEY)
 
     if not post_text:
-        await bot.send_message(user_id, f"⚠️ Не удалось сгенерировать пост.\n\n{audit}")
+        await bot.send_message(user_id, "⚠️ Не удалось сгенерировать пост. Попробуй ещё раз.")
         return
 
     pending_posts[user_id] = post_text
 
-    preview = escape_md(
-        f"📋 АУДИТ:\n{audit}\n\n"
-        f"— ЧЕРНОВИК —\n\n{post_text}"
-    )
     try:
-        await bot.send_message(user_id, preview, reply_markup=approval_keyboard(), parse_mode="MarkdownV2")
+        await bot.send_message(user_id, escape_md(post_text), reply_markup=approval_keyboard(), parse_mode="MarkdownV2")
     except TelegramBadRequest as e:
-        # Markdown parse error — drop the bad draft and tell the user
         pending_posts.pop(user_id, None)
         print(f"[prepare_publication] TelegramBadRequest: {e}")
         await bot.send_message(
@@ -134,24 +126,25 @@ async def handle_voice(message: Message) -> None:
                 await message.answer("⚠️ Нет черновика для редактирования. Сначала сгенерируй пост командой /publish.")
                 return
             notify = await message.answer("✏️ Вношу правки в черновик...")
-            result = await loop.run_in_executor(
+            new_post = await loop.run_in_executor(
                 None, edit_current_post, old_post, text_output, OPENROUTER_API_KEY
             )
             await notify.delete()
 
-            post_text = result.get("post_text", "").strip()
-            audit     = result.get("audit", "Аудит недоступен.").strip()
-
-            if not post_text:
-                await message.answer(f"⚠️ Не удалось отредактировать пост.\n\n{audit}")
+            if not new_post:
+                await message.answer("⚠️ Не удалось отредактировать пост. Черновик не изменён.")
                 return
 
-            pending_posts[user_id] = post_text
-            preview = escape_md(
-                f"📋 АУДИТ ПРАВОК:\n{audit}\n\n"
-                f"— ОБНОВЛЁННЫЙ ЧЕРНОВИК —\n\n{post_text}"
-            )
-            await message.answer(preview, reply_markup=approval_keyboard(), parse_mode="MarkdownV2")
+            pending_posts[user_id] = new_post
+            try:
+                await message.answer(escape_md(new_post), reply_markup=approval_keyboard(), parse_mode="MarkdownV2")
+            except TelegramBadRequest as e:
+                pending_posts.pop(user_id, None)
+                print(f"[edit_post] TelegramBadRequest: {e}")
+                await message.answer(
+                    f"⚠️ Telegram отклонил разметку — черновик сброшен.\n\n"
+                    f"— ЧЕРНОВИК (сырой текст) —\n\n{new_post}",
+                )
 
         elif intent == "SHOW_POST":
             post_text = pending_posts.get(user_id)
