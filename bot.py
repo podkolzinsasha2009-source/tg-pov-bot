@@ -15,7 +15,7 @@ from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_applicati
 
 import db
 from config import ALLOWED_USER_ID, BASE_WEBHOOK_URL, BOT_TOKEN, CHANNEL_ID, OPENROUTER_API_KEY, PORT
-from openrouter_cl import edit_current_post, get_structured_post, transcribe_audio
+from openrouter_cl import classify_intent, edit_current_post, get_structured_post, transcribe_audio
 
 WEBHOOK_PATH = "/webhook"
 WEBHOOK_URL = f"{BASE_WEBHOOK_URL}{WEBHOOK_PATH}"
@@ -100,11 +100,14 @@ async def handle_voice(message: Message) -> None:
             None, transcribe_audio, audio_bytes, OPENROUTER_API_KEY
         )
         print(f"[voice] транскрипция: {text_output[:80]!r}")
+
+        await status_msg.edit_text("🧠 Определяю намерение...")
+        intent = await loop.run_in_executor(
+            None, classify_intent, text_output, OPENROUTER_API_KEY
+        )
         await status_msg.delete()
 
-        cmd = text_output.lower()
-
-        if "опубликовать пост" in cmd:
+        if intent == "PUBLISH_POST":
             post_text = pending_posts.pop(user_id, None)
             if not post_text:
                 await message.answer("⚠️ Нет готового черновика. Сначала сгенерируй пост командой /publish.")
@@ -112,7 +115,7 @@ async def handle_voice(message: Message) -> None:
             await bot.send_message(CHANNEL_ID, post_text)
             await message.answer("✅ Пост опубликован в канале!")
 
-        elif "измени пост" in cmd:
+        elif intent == "EDIT_POST":
             old_post = pending_posts.get(user_id)
             if not old_post:
                 await message.answer("⚠️ Нет черновика для редактирования. Сначала сгенерируй пост командой /publish.")
@@ -137,7 +140,17 @@ async def handle_voice(message: Message) -> None:
             )
             await message.answer(preview, reply_markup=approval_keyboard())
 
-        else:
+        elif intent == "SHOW_POST":
+            post_text = pending_posts.get(user_id)
+            if not post_text:
+                await message.answer("📭 Черновика пока нет. Сгенерируй пост командой /publish.")
+            else:
+                await message.answer(
+                    f"--- 📝 ТЕКУЩИЙ ЧЕРНОВИК ---\n\n{post_text}",
+                    reply_markup=approval_keyboard(),
+                )
+
+        else:  # SAVE_THOUGHT
             db.add_thought(user_id, text_output)
             await message.answer(f"💾 Мысль сохранена:\n\n{text_output}")
 
