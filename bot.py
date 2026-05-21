@@ -156,6 +156,7 @@ async def handle_reject(callback: CallbackQuery) -> None:
 
 async def on_startup(bot: Bot) -> None:
     db.init_db()
+    await bot.delete_webhook(drop_pending_updates=True)
     await bot.set_webhook(WEBHOOK_URL)
     print(f"[startup] webhook установлен: {WEBHOOK_URL}")
 
