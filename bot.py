@@ -234,38 +234,56 @@ async def handle_reject(callback: CallbackQuery) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Startup / shutdown
+# Health-check
 # ---------------------------------------------------------------------------
-
-async def on_startup(bot: Bot) -> None:
-    db.init_db()
-    await bot.delete_webhook(drop_pending_updates=True)
-    await bot.set_webhook(WEBHOOK_URL)
-    print(f"[startup] webhook установлен: {WEBHOOK_URL}")
-
-
-async def on_shutdown(bot: Bot) -> None:
-    await bot.delete_webhook()
-    print("[shutdown] webhook удалён")
-
 
 async def health_check(request: web.Request) -> web.Response:
     return web.Response(text="Бот работает")
 
 
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
 def main() -> None:
-    dp.startup.register(on_startup)
-    dp.shutdown.register(on_shutdown)
+    port = int(os.environ.get("PORT", 10000))
 
     app = web.Application()
     app.router.add_get("/", health_check)
-
     SimpleRequestHandler(dispatcher=dp, bot=bot).register(app, path=WEBHOOK_PATH)
     setup_application(app, dp, bot=bot)
 
-    port = int(os.environ.get("PORT", 10000))
-    print(f"[main] запуск на порту {port}", flush=True)
-    web.run_app(app, host="0.0.0.0", port=port)
+    async def _run() -> None:
+        # 1. Открываем порт ПЕРВЫМ — Render должен увидеть его немедленно
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, "0.0.0.0", port)
+        await site.start()
+        print(f"[main] порт {port} открыт, принимаю запросы", flush=True)
+
+        # 2. Инициализация БД
+        db.init_db()
+
+        # 3. Вебхук — ошибки не роняют сервер
+        try:
+            await bot.delete_webhook(drop_pending_updates=True)
+            await bot.set_webhook(WEBHOOK_URL)
+            print(f"[startup] webhook: {WEBHOOK_URL}", flush=True)
+        except Exception as e:
+            print(f"[startup] ошибка webhook: {e}", flush=True)
+
+        # 4. Бесконечный цикл — держим процесс до SIGTERM
+        try:
+            await asyncio.Event().wait()
+        finally:
+            try:
+                await bot.delete_webhook()
+            except Exception:
+                pass
+            await runner.cleanup()
+            print("[shutdown] завершено", flush=True)
+
+    asyncio.run(_run())
 
 
 if __name__ == "__main__":
