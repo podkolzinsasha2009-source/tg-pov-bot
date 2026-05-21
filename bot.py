@@ -16,7 +16,7 @@ from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_applicati
 
 import db
 from config import ALLOWED_USER_ID, BASE_WEBHOOK_URL, BOT_TOKEN, CHANNEL_ID, OPENROUTER_API_KEY, PORT
-from openrouter_cl import classify_intent, edit_current_post, get_structured_post, transcribe_audio
+from openrouter_cl import classify_intent, edit_current_post, escape_md, get_structured_post, transcribe_audio
 
 WEBHOOK_PATH = "/webhook"
 WEBHOOK_URL = f"{BASE_WEBHOOK_URL}{WEBHOOK_PATH}"
@@ -57,11 +57,11 @@ async def prepare_publication(user_id: int) -> None:
 
     pending_posts[user_id] = post_text
 
-    preview = (
-        f"📋 АНАЛИЗ РИСКОВ ОТ GEMINI 3.5 FLASH:\n{audit}\n\n"
-        f"--- 📝 ЧЕРНОВИК ПОСТА ---\n\n{post_text}"
+    preview = escape_md(
+        f"📋 АУДИТ:\n{audit}\n\n"
+        f"— ЧЕРНОВИК —\n\n{post_text}"
     )
-    await bot.send_message(user_id, preview, reply_markup=approval_keyboard())
+    await bot.send_message(user_id, preview, reply_markup=approval_keyboard(), parse_mode="MarkdownV2")
 
 
 # ---------------------------------------------------------------------------
@@ -113,7 +113,7 @@ async def handle_voice(message: Message) -> None:
             if not post_text:
                 await message.answer("⚠️ Нет готового черновика. Сначала сгенерируй пост командой /publish.")
                 return
-            await bot.send_message(CHANNEL_ID, post_text, parse_mode="HTML")
+            await bot.send_message(CHANNEL_ID, escape_md(post_text), parse_mode="MarkdownV2")
             await message.answer("✅ Пост опубликован в канале!")
 
         elif intent == "EDIT_POST":
@@ -135,11 +135,11 @@ async def handle_voice(message: Message) -> None:
                 return
 
             pending_posts[user_id] = post_text
-            preview = (
-                f"📋 АУДИТ ПРАВОК ОТ GEMINI:\n{audit}\n\n"
-                f"--- 📝 ОБНОВЛЁННЫЙ ЧЕРНОВИК ---\n\n{post_text}"
+            preview = escape_md(
+                f"📋 АУДИТ ПРАВОК:\n{audit}\n\n"
+                f"— ОБНОВЛЁННЫЙ ЧЕРНОВИК —\n\n{post_text}"
             )
-            await message.answer(preview, reply_markup=approval_keyboard())
+            await message.answer(preview, reply_markup=approval_keyboard(), parse_mode="MarkdownV2")
 
         elif intent == "SHOW_POST":
             post_text = pending_posts.get(user_id)
@@ -147,8 +147,9 @@ async def handle_voice(message: Message) -> None:
                 await message.answer("📭 Черновика пока нет. Сгенерируй пост командой /publish.")
             else:
                 await message.answer(
-                    f"--- 📝 ТЕКУЩИЙ ЧЕРНОВИК ---\n\n{post_text}",
+                    escape_md(f"— ТЕКУЩИЙ ЧЕРНОВИК —\n\n{post_text}"),
                     reply_markup=approval_keyboard(),
+                    parse_mode="MarkdownV2",
                 )
 
         else:  # SAVE_THOUGHT
@@ -219,7 +220,7 @@ async def handle_approve(callback: CallbackQuery) -> None:
         await callback.answer("⚠️ Пост не найден в кэше.", show_alert=True)
         return
 
-    await bot.send_message(CHANNEL_ID, post_text, parse_mode="HTML")
+    await bot.send_message(CHANNEL_ID, escape_md(post_text), parse_mode="MarkdownV2")
     await callback.message.edit_reply_markup(reply_markup=None)
     await callback.message.answer("✅ Пост опубликован в канале!")
     await callback.answer()
