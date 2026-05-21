@@ -3,7 +3,7 @@ import requests
 from config import OPENROUTER_API_KEY, SYSTEM_PROMPT
 
 API_URL = "https://openrouter.ai/api/v1/chat/completions"
-MODEL = "google/gemini-2.5-flash"
+MODEL = "google/gemini-3.5-flash"
 
 
 def process_audio_to_post(audio_bytes: bytes) -> str:
