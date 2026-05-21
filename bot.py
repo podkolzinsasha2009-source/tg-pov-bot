@@ -5,6 +5,7 @@ import traceback
 
 from aiohttp import web
 from aiogram import Bot, Dispatcher, F
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.types import (
     CallbackQuery,
@@ -61,7 +62,18 @@ async def prepare_publication(user_id: int) -> None:
         f"📋 АУДИТ:\n{audit}\n\n"
         f"— ЧЕРНОВИК —\n\n{post_text}"
     )
-    await bot.send_message(user_id, preview, reply_markup=approval_keyboard(), parse_mode="MarkdownV2")
+    try:
+        await bot.send_message(user_id, preview, reply_markup=approval_keyboard(), parse_mode="MarkdownV2")
+    except TelegramBadRequest as e:
+        # Markdown parse error — drop the bad draft and tell the user
+        pending_posts.pop(user_id, None)
+        print(f"[prepare_publication] TelegramBadRequest: {e}")
+        await bot.send_message(
+            user_id,
+            f"⚠️ Telegram отклонил разметку черновика — черновик сброшен.\n\n"
+            f"Попробуй /publish ещё раз.\n\n"
+            f"— ЧЕРНОВИК (сырой текст) —\n\n{post_text}",
+        )
 
 
 # ---------------------------------------------------------------------------
