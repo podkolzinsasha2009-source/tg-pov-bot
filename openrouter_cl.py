@@ -81,7 +81,11 @@ def transcribe_audio(audio_bytes: bytes, api_key: str) -> str:
         return f"Ошибка OpenRouter: {msg}"
 
     try:
-        return data["choices"][0]["message"]["content"].strip()
+        content = data["choices"][0]["message"]["content"]
+        if content is None:
+            print(f"[transcribe] content=None, полный ответ: {data}")
+            return "Ошибка: модель вернула пустой ответ (content: null)"
+        return content.strip()
     except (KeyError, IndexError) as e:
         print(f"[transcribe] неожиданный ответ: {data}")
         return f"Неожиданный ответ API: {data}"
