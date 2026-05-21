@@ -3,11 +3,18 @@ import io
 
 from aiohttp import web
 from aiogram import Bot, Dispatcher, F
-from aiogram.types import Message
+from aiogram.filters import Command
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+)
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 
-from config import BOT_TOKEN, ALLOWED_USER_ID, BASE_WEBHOOK_URL, PORT
-from openrouter_cl import process_audio_to_post
+import db
+from config import ALLOWED_USER_ID, BASE_WEBHOOK_URL, BOT_TOKEN, CHANNEL_ID, OPENROUTER_API_KEY, PORT
+from openrouter_cl import get_structured_post, transcribe_audio
 
 WEBHOOK_PATH = "/webhook"
 WEBHOOK_URL = f"{BASE_WEBHOOK_URL}{WEBHOOK_PATH}"
@@ -15,6 +22,49 @@ WEBHOOK_URL = f"{BASE_WEBHOOK_URL}{WEBHOOK_PATH}"
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
+# user_id -> готовый текст поста, ожидающий подтверждения
+pending_posts: dict[int, str] = {}
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def approval_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="🚀 Опубликовать", callback_data="approve_post"),
+        InlineKeyboardButton(text="❌ Отклонить",    callback_data="reject_post"),
+    ]])
+
+
+async def prepare_publication(user_id: int) -> None:
+    archive = db.get_and_clear_thoughts(user_id)
+    if not archive:
+        await bot.send_message(user_id, "📭 Нет сохранённых мыслей для публикации.")
+        return
+
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(None, get_structured_post, archive, OPENROUTER_API_KEY)
+
+    post_text = result.get("post_text", "").strip()
+    audit     = result.get("audit", "Аудит недоступен.").strip()
+
+    if not post_text:
+        await bot.send_message(user_id, f"⚠️ Не удалось сгенерировать пост.\n\n{audit}")
+        return
+
+    pending_posts[user_id] = post_text
+
+    preview = (
+        f"📋 АНАЛИЗ РИСКОВ ОТ GEMINI 3.5 FLASH:\n{audit}\n\n"
+        f"--- 📝 ЧЕРНОВИК ПОСТА ---\n\n{post_text}"
+    )
+    await bot.send_message(user_id, preview, reply_markup=approval_keyboard())
+
+
+# ---------------------------------------------------------------------------
+# Handlers
+# ---------------------------------------------------------------------------
 
 @dp.message(F.voice)
 async def handle_voice(message: Message) -> None:
@@ -28,16 +78,61 @@ async def handle_voice(message: Message) -> None:
     await bot.download_file(file_info.file_path, destination=buf)
     audio_bytes = buf.getvalue()
 
-    await status_msg.edit_text("📝 Gemini генерирует пост...")
+    await status_msg.edit_text("✍️ Транскрибирую...")
 
     loop = asyncio.get_running_loop()
-    post_text = await loop.run_in_executor(None, process_audio_to_post, audio_bytes)
-
-    await message.answer(post_text, parse_mode="Markdown")
+    text_output = await loop.run_in_executor(
+        None, transcribe_audio, audio_bytes, OPENROUTER_API_KEY
+    )
     await status_msg.delete()
 
+    if "опубликовать пост" in text_output.lower():
+        notify = await message.answer("🔄 Собираю архив и готовлю публикацию...")
+        await prepare_publication(message.from_user.id)
+        await notify.delete()
+    else:
+        db.add_thought(message.from_user.id, text_output)
+        await message.answer(f"💾 Мысль сохранена:\n\n{text_output}")
+
+
+@dp.message(Command("publish"))
+async def handle_publish(message: Message) -> None:
+    if message.from_user.id != ALLOWED_USER_ID:
+        return
+    notify = await message.answer("🔄 Собираю архив и готовлю публикацию...")
+    await prepare_publication(message.from_user.id)
+    await notify.delete()
+
+
+@dp.callback_query(F.data == "approve_post")
+async def handle_approve(callback: CallbackQuery) -> None:
+    user_id   = callback.from_user.id
+    post_text = pending_posts.pop(user_id, None)
+
+    if not post_text:
+        await callback.answer("⚠️ Пост не найден в кэше.", show_alert=True)
+        return
+
+    await bot.send_message(CHANNEL_ID, post_text)
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await callback.message.answer("✅ Пост опубликован в канале!")
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "reject_post")
+async def handle_reject(callback: CallbackQuery) -> None:
+    pending_posts.pop(callback.from_user.id, None)
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await callback.message.answer("❌ Пост отклонён.")
+    await callback.answer()
+
+
+# ---------------------------------------------------------------------------
+# Startup / shutdown
+# ---------------------------------------------------------------------------
 
 async def on_startup(bot: Bot) -> None:
+    db.init_db()
     await bot.set_webhook(WEBHOOK_URL)
 
 
